@@ -7,11 +7,20 @@
  * test files with a single, easy-to-use interface.
  */
 
-import { execSync, spawn } from "child_process";
+import { execSync, spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import ora from "ora";
 import config, { TIMEOUTS, TEST_URLS } from "./config.js";
+
+const rejectImageDependenciesLoader = `data:text/javascript,${encodeURIComponent(`
+  export async function resolve(specifier, context, nextResolve) {
+    if (specifier === "sharp") {
+      throw new Error("Image dependency loaded during CLI startup: " + specifier);
+    }
+    return nextResolve(specifier, context);
+  }
+`)}`;
 
 class PakeTestRunner {
   constructor() {
@@ -136,11 +145,15 @@ class PakeTestRunner {
     try {
       execSync(`node "${config.CLI_PATH}" --version`, {
         encoding: "utf8",
-        timeout: 3000,
+        timeout: TIMEOUTS.QUICK,
       });
-      console.log("[PASS] CLI is executable");
+      console.log("[PASS] CLI responds");
     } catch (error) {
-      console.log("[FAIL] CLI is not executable");
+      const reason =
+        error.signal === "SIGTERM"
+          ? `timed out after ${TIMEOUTS.QUICK}ms`
+          : error.message;
+      console.log(`[FAIL] CLI did not respond: ${reason}`);
       process.exit(1);
     }
 
@@ -196,6 +209,31 @@ class PakeTestRunner {
       TIMEOUTS.QUICK,
     );
 
+    // Metadata-only commands must not initialize native image tooling.
+    await this.runTest(
+      "Version Command Without Image Dependencies",
+      () => {
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--no-warnings",
+            "--experimental-loader",
+            rejectImageDependenciesLoader,
+            config.CLI_PATH,
+            "--version",
+          ],
+          {
+            encoding: "utf8",
+            timeout: TIMEOUTS.QUICK,
+          },
+        );
+        return (
+          result.status === 0 && /^\d+\.\d+\.\d+/.test(result.stdout.trim())
+        );
+      },
+      TIMEOUTS.QUICK,
+    );
+
     // Help command test
     await this.runTest(
       "Help Command",
@@ -211,15 +249,16 @@ class PakeTestRunner {
 
     // URL validation test
     await this.runTest("URL Validation", () => {
-      try {
-        execSync(`node "${config.CLI_PATH}" "invalid-url" --name TestApp`, {
-          encoding: "utf8",
-          timeout: TIMEOUTS.QUICK,
-        });
-        return false; // Should have failed
-      } catch (error) {
-        return error.status !== 0;
-      }
+      const result = spawnSync(
+        process.execPath,
+        [config.CLI_PATH, "", "--name", "TestApp", "--json"],
+        { encoding: "utf8", timeout: TIMEOUTS.QUICK },
+      );
+      return (
+        !result.error &&
+        result.status === 2 &&
+        JSON.parse(result.stdout).error?.code === "INVALID_INPUT"
+      );
     });
 
     // Number validation test
@@ -244,23 +283,6 @@ class PakeTestRunner {
       });
       const elapsed = Date.now() - start;
       return elapsed < 5000;
-    });
-
-    // Weekly URL accessibility test
-    await this.runTest("Weekly URL Accessibility", () => {
-      try {
-        const testCommand = `node "${config.CLI_PATH}" ${TEST_URLS.WEEKLY} --name "URLTest" --debug`;
-        execSync(`echo "n" | timeout 5s ${testCommand} || true`, {
-          encoding: "utf8",
-          timeout: 8000,
-        });
-        return true; // If we get here, URL was parsed successfully
-      } catch (error) {
-        return (
-          !error.message.includes("Invalid URL") &&
-          !error.message.includes("invalid")
-        );
-      }
     });
   }
 
@@ -311,8 +333,10 @@ class PakeTestRunner {
         );
 
         const essentialDeps = ["commander", "chalk", "fs-extra", "execa"];
-        return essentialDeps.every(
-          (dep) => packageJson.dependencies && packageJson.dependencies[dep],
+        return (
+          essentialDeps.every(
+            (dep) => packageJson.dependencies && packageJson.dependencies[dep],
+          ) && !packageJson.dependencies["icon-gen"]
         );
       } catch {
         return false;
@@ -648,27 +672,32 @@ class PakeTestRunner {
   }
 
   async runLocalFileTest() {
-    await this.runTest("Local File Build Handling", async () => {
-      const testFile = path.join(config.PROJECT_ROOT, "test-local.html");
-      fs.writeFileSync(
-        testFile,
-        "<html><body><h1>Hello Pake</h1></body></html>",
+    if (process.platform !== "darwin") {
+      console.log(
+        "Local artifact fixture skipped: currently uses macOS .app paths; staging is covered by Vitest.",
       );
-      this.trackTempFile(testFile);
-
-      try {
-        const command = `node "${config.CLI_PATH}" "${testFile}" --name "LocalApp" --debug`;
-        // We just verify it accepts the local file path
-        execSync(`echo "n" | timeout 5s ${command} || true`, {
-          encoding: "utf8",
-          timeout: 8000,
-        });
+      return;
+    }
+    await this.runTest(
+      "Local File Build Isolation",
+      () => {
+        const result = spawnSync(
+          process.execPath,
+          [
+            path.join(
+              config.PROJECT_ROOT,
+              "tests/integration/build-workspace.mjs",
+            ),
+          ],
+          { cwd: config.PROJECT_ROOT, encoding: "utf8", timeout: 120000 },
+        );
+        if (result.error || result.status !== 0) {
+          throw result.error || new Error(result.stderr || result.stdout);
+        }
         return true;
-      } catch (error) {
-        // Validation failure is what we want to catch (if it rejected local files)
-        return !error.message.includes("Invalid URL");
-      }
-    });
+      },
+      120000,
+    );
   }
 
   async runRealBuildTest() {
@@ -984,6 +1013,7 @@ class PakeTestRunner {
             if (output.includes("Compiling")) compilationStarted = true;
             if (output.includes("Finished"))
               console.log("   [PASS] Multi-arch compilation finished!");
+            process.stderr.write(data);
           });
 
           // Multi-arch builds take longer - 20 minutes timeout

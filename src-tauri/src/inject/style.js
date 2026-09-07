@@ -10,7 +10,7 @@ window.addEventListener("DOMContentLoaded", (_event) => {
     #Bottom > div.content > div.inner,
     #Rightbar .sep20:nth-of-type(5),
     #Rightbar > div.box:nth-child(4),
-    #Main > div.box:nth-child(8) > div
+    #Main > div.box:nth-child(8) > div,
     #Wrapper > div.sep20,
     #Main > div.box:nth-child(8),
     #masthead-ad,
@@ -240,19 +240,17 @@ window.addEventListener("DOMContentLoaded", (_event) => {
         position: fixed !important;
         top: 12px !important;
         right: 16px !important;
+        left: auto !important;
+        width: 182px !important;
       }
 
-      #react-root [data-testid="sidebarColumn"] input[placeholder="Search"] {
-        width: 150px;
+      #react-root [data-testid="sidebarColumn"] form[role="search"] input[data-testid="SearchBox_Search_Input"] {
+        width: 100% !important;
       }
 
       #react-root [data-testid="sidebarColumn"] form[role="search"]:focus-within {
         width: 280px !important;
         backdrop-filter: blur(12px) !important;
-      }
-
-      #react-root [data-testid="sidebarColumn"] input[placeholder="Search"]:focus {
-        width: 234px !important;
       }
     }
 
@@ -262,19 +260,17 @@ window.addEventListener("DOMContentLoaded", (_event) => {
         position: fixed !important;
         top: 12px !important;
         right: 16px !important;
+        left: auto !important;
+        width: 182px !important;
       }
 
-      #react-root [data-testid="sidebarColumn"] input[placeholder="Search"] {
-        width: 150px;
+      #react-root [data-testid="sidebarColumn"] form[role="search"] input[data-testid="SearchBox_Search_Input"] {
+        width: 100% !important;
       }
 
       #react-root [data-testid="sidebarColumn"] form[role="search"]:focus-within {
         width: 374px !important;
         backdrop-filter: blur(12px) !important;
-      }
-
-      #react-root [data-testid="sidebarColumn"] input[placeholder="Search"]:focus {
-        width: 328px !important;
       }
 
       #react-root div[style*="left: -12px"] {
@@ -324,9 +320,14 @@ window.addEventListener("DOMContentLoaded", (_event) => {
       padding-top: 36px;
     }
   `;
-  const contentStyleElement = document.createElement("style");
-  contentStyleElement.textContent = contentCSS;
-  document.head.appendChild(contentStyleElement);
+  if (typeof window.__PAKE_INJECT_STYLE__ === "function") {
+    window.__PAKE_INJECT_STYLE__(contentCSS, "pake-content-style");
+  } else {
+    const contentStyleElement = document.createElement("style");
+    contentStyleElement.id = "pake-content-style";
+    contentStyleElement.textContent = contentCSS;
+    document.head.appendChild(contentStyleElement);
+  }
 
   // Top spacing adapts to head-hiding scenarios
   const topPaddingCSS = `
@@ -401,6 +402,11 @@ window.addEventListener("DOMContentLoaded", (_event) => {
 
     #__next .sticky.left-0.right-0.top-0.z-20.bg-black{
       padding-top: 0px;
+    }
+
+    #notion-app .notion-sidebar,#notion-app .notion-topbar{
+      padding-top: 20px;
+      box-sizing: content-box;
     }
 
     #header-area > div > .css-gtiexd > div:nth-child(1) > div, #header-area .logoIcon .user-info{
@@ -497,9 +503,38 @@ window.addEventListener("DOMContentLoaded", (_event) => {
     }
   `;
   const isMac = /Mac/i.test(navigator.userAgent);
-  if (window["pakeConfig"]?.hide_title_bar && isMac) {
-    const topPaddingStyleElement = document.createElement("style");
-    topPaddingStyleElement.textContent = topPaddingCSS;
-    document.head.appendChild(topPaddingStyleElement);
+  if (hasImmersiveHeader(window["pakeConfig"])) {
+    const topPaddingCSSForPlatform = isMac
+      ? topPaddingCSS
+      : `
+    #pake-top-dom:active {
+      cursor: grabbing;
+      cursor: -webkit-grabbing;
+    }
+
+    #pake-top-dom {
+      position: fixed;
+      background: transparent;
+      top: 0;
+      width: 100%;
+      height: 20px;
+      cursor: grab;
+      -webkit-app-region: drag;
+      user-select: none;
+      -webkit-user-select: none;
+      z-index: 99999;
+    }
+    `;
+    if (typeof window.__PAKE_INJECT_STYLE__ === "function") {
+      window.__PAKE_INJECT_STYLE__(
+        topPaddingCSSForPlatform,
+        "pake-top-padding-style",
+      );
+    } else {
+      const topPaddingStyleElement = document.createElement("style");
+      topPaddingStyleElement.id = "pake-top-padding-style";
+      topPaddingStyleElement.textContent = topPaddingCSSForPlatform;
+      document.head.appendChild(topPaddingStyleElement);
+    }
   }
 });
